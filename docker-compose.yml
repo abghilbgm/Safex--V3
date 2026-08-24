@@ -1,0 +1,68 @@
+# docker-compose.yml
+# ---------------------------------------------------------------------------
+# Uses PostgreSQL 14 (matching your existing PG version). The healthcheck +
+# depends_on: condition: service_healthy ensures the app container only
+# starts AFTER Postgres reports itself ready to accept connections - this,
+# combined with the app's own internal connection-retry logic (see
+# app/db.py init_pool()), is what prevents "Application startup failed.
+# Exiting." caused by the app trying to connect before Postgres is ready.
+#
+# Usage:
+#   copy .env.example to .env, then:
+#   docker compose up -d --build
+#   docker compose logs -f ppe-app        <- watch startup here
+# ---------------------------------------------------------------------------
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:14-alpine
+    container_name: ppe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ppe_compliance}
+      POSTGRES_USER: ${POSTGRES_USER:-ppe_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ppe_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ppe-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ppe_user} -d ${POSTGRES_DB:-ppe_compliance}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  ppe-app:
+    build: .
+    image: ppe-compliance:latest
+    container_name: ppe-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # IMPORTANT: when running via docker-compose, POSTGRES_HOST MUST be
+      # "postgres" (the service name above), NOT "localhost" - containers
+      # can't reach each other via localhost. This overrides whatever is
+      # in .env so you don't have to remember to change it yourself.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      PPE_DEVICE: "cpu"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/app/models:ro
+      - ppe-snapshots:/app/data/snapshots
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  ppe-postgres-data:
+  ppe-snapshots:
