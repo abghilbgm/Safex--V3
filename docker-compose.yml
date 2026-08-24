@@ -1,0 +1,47 @@
+version: "3.9"
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ppe-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ppe_compliance}
+      POSTGRES_USER: ${POSTGRES_USER:-ppe_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ppe_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ppe-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ppe_user} -d ${POSTGRES_DB:-ppe_compliance}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ppe-app:
+    build: .
+    image: ppe-compliance:latest
+    container_name: ppe-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      PPE_DEVICE: "cpu"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/app/models:ro
+      - ppe-snapshots:/app/data/snapshots
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  ppe-postgres-data:
+  ppe-snapshots:
