@@ -34,13 +34,15 @@
           <button class="tab-btn" data-tab="rules">Rules</button>
         </div>
       </div>
+
       <div id="tab-feeds" class="tab-content active">
         <div class="feeds-toolbar">
           <button class="btn-secondary" id="btnReconnectAll">↻ Reconnect All Cameras</button>
-          <span class="feeds-hint">Use the ↻ button on any tile below to reconnect just that camera (useful for PTZ cameras that pan/zoom).</span>
+          <span class="feeds-hint">If cameras are missing below, go to the <b>Cameras</b> tab and click "Sync Default Cameras".</span>
         </div>
         <div id="feedsByGroup"></div>
       </div>
+
       <div id="tab-violations" class="tab-content">
         <div class="violations-toolbar">
           <select id="violationCameraFilter"><option value="">All Cameras</option></select>
@@ -58,6 +60,7 @@
         </div>
         <div class="violations-gallery" id="violationsGallery"><div class="event-empty">Loading violations…</div></div>
       </div>
+
       <div id="tab-analytics" class="tab-content">
         <div class="analytics-grid">
           <div class="card chart-card"><h3>Violations — Last 24h</h3><canvas id="hourlyChart" height="160"></canvas></div>
@@ -65,16 +68,20 @@
           <div class="card chart-card wide"><h3>By Area Group</h3><canvas id="areaGroupChart" height="140"></canvas></div>
         </div>
       </div>
+
       <div id="tab-cameras" class="tab-content">
         <div class="cameras-toolbar">
           <button class="btn-primary" id="btnNewCamera">+ Add Camera</button>
           <button class="btn-secondary" id="btnManageGroups">Manage Area Groups</button>
+          <button class="btn-sync" id="btnSyncSeed" title="Adds any of the 16 default cameras (from config.py) that are missing from the database. Never touches existing cameras.">⟲ Sync Default Cameras</button>
+          <span class="sync-status" id="syncStatus"></span>
         </div>
         <table class="rules-table cameras-table">
           <thead><tr><th>Camera ID</th><th>Name</th><th>Area Group</th><th>Required PPE</th><th>Status</th><th>State</th><th></th></tr></thead>
           <tbody id="camerasTableBody"></tbody>
         </table>
       </div>
+
       <div id="tab-rules" class="tab-content">
         <div class="rules-panel">
           <div class="rules-header"><h3>Alert Rules</h3><button class="btn-primary" id="btnNewRule">+ New Rule</button></div>

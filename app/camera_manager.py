@@ -4,32 +4,11 @@ camera_manager.py
 Manages the lifecycle of camera worker tasks dynamically (add/edit/refresh/
 delete from the dashboard, no app restart needed).
 
-RELIABILITY FIXES in this version (root cause of "not all cameras loaded",
-"video keeps reconnecting/sliding", and "violations failing to load"):
-
-1. THROTTLED DB STATUS WRITES: previously `db.update_camera_status()` was
-   called on EVERY loop iteration (~100x/second per camera). With 16
-   cameras that is up to ~1600 writes/second hammering PostgreSQL, which
-   exhausts the connection pool. Now it's throttled to once every
-   config.CAMERA_STATUS_UPDATE_INTERVAL seconds per camera (default 4s).
-
-2. SELF-HEALING LOOP: previously any unexpected exception inside a
-   camera's loop (e.g. a transient DB timeout, a cv2 decode hiccup, a
-   momentary network blip) would propagate up and permanently kill that
-   camera's asyncio task - the camera would simply stop, look "stuck" on
-   the dashboard, and never recover without a manual restart of the whole
-   app. Now each loop iteration's body is wrapped in try/except: on any
-   non-cancellation error, it's logged and the loop continues on the next
-   iteration instead of dying. This is what was silently killing camera
-   workers under load (explaining cameras that "don't all load"), and
-   contributing to DB pool exhaustion cascading into /api/violations
-   failures for the whole app.
-
-3. RETRY-SAFE VIOLATION LOGGING: a violation is only marked as "already
-   alerted" AFTER its DB write succeeds. If db.log_violation() fails
-   (e.g. transient pool exhaustion), the same violation is retried on the
-   next frame instead of being silently dropped - so a temporary DB hiccup
-   no longer means a lost/unsaved violation image+record.
+RELIABILITY: throttled DB status writes (was every loop tick, now every
+CAMERA_STATUS_UPDATE_INTERVAL seconds/camera), self-healing loop (a
+transient error is logged and the loop continues instead of the camera
+task dying permanently), and retry-safe violation logging (a violation is
+only marked "already logged" after its DB write succeeds).
 """
 import os
 import cv2
@@ -102,10 +81,6 @@ class CameraManager:
         logger.info(f"[{camera_id}] worker stopped")
 
     async def refresh_camera(self, camera_id: str) -> bool:
-        """Stop + restart using the LATEST DB row. This is the handler
-        behind both the dashboard's per-camera 'Reconnect' button (Feeds
-        tab) and the Cameras tab's 'Refresh' button - same operation,
-        two entry points."""
         camera = await db.get_camera(camera_id)
         if not camera:
             return False
@@ -115,6 +90,9 @@ class CameraManager:
         return True
 
     async def reconcile_all(self):
+        """Starts a worker for every ENABLED camera in the DB. If one
+        camera fails to start (bad URL, etc.), it's logged and skipped -
+        it never blocks the rest from starting."""
         cameras = await db.list_cameras()
         started = 0
         for cam in cameras:
@@ -123,8 +101,6 @@ class CameraManager:
                     await self.start_camera(cam)
                     started += 1
                 except Exception as e:
-                    # A failure starting ONE camera must never prevent the
-                    # rest from starting - this loop continues regardless.
                     logger.error(f"[{cam['camera_id']}] failed to start during reconcile: {e}")
         logger.info(f"Reconciled {len(cameras)} camera(s) from DB ({started} started)")
 
@@ -155,8 +131,6 @@ class CameraManager:
         broadcast_interval = 1.0 / max(1, config.BROADCAST_FPS)
         last_broadcast = 0.0
         last_status_write = 0.0
-
-        logger.info(f"[{camera_id}] worker loop entering (self-healing enabled)")
 
         while True:
             try:
@@ -197,9 +171,6 @@ class CameraManager:
                                     violation_id, camera_id, camera_name, area_group_name,
                                     status.track_id, violation_type, snapshot_path,
                                 )
-                                # Only mark as alerted AFTER a successful DB write, so a
-                                # transient DB error causes a RETRY next frame instead of
-                                # silently losing this violation.
                                 already_alerted_ids.add(alert_key)
 
                                 await hub.broadcast_event({
@@ -215,10 +186,7 @@ class CameraManager:
                                     "rules_matched": [m.rule_name for m in matches],
                                     "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                                 })
-                                logger.info(f"[{camera_id}] VIOLATION id={violation_id} type={violation_type} "
-                                            f"area_group={area_group_name}")
                             except Exception as e:
-                                # Do NOT add to already_alerted_ids - retry next frame.
                                 logger.warning(f"[{camera_id}] failed to log/alert violation "
                                                 f"'{violation_type}' (will retry next frame): {e}")
 
@@ -230,10 +198,6 @@ class CameraManager:
                         await hub.broadcast_frame(camera_id, buf.tobytes())
                     last_broadcast = now
 
-                # THROTTLED status write - was previously every loop tick
-                # (~100x/sec/camera); now at most once per
-                # CAMERA_STATUS_UPDATE_INTERVAL seconds. This single change
-                # is the main fix for DB pool exhaustion under many cameras.
                 if now - last_status_write >= config.CAMERA_STATUS_UPDATE_INTERVAL:
                     try:
                         await db.update_camera_status(camera_id, camera_name, area_group_name,
@@ -248,9 +212,6 @@ class CameraManager:
                 logger.info(f"[{camera_id}] worker cancelled (stop/refresh requested)")
                 raise
             except Exception as e:
-                # SELF-HEALING: any other unexpected error (DB blip, cv2
-                # decode error, transient network issue) is logged and the
-                # loop CONTINUES instead of the whole camera task dying.
                 logger.error(f"[{camera_id}] unexpected error in worker loop (continuing): "
                              f"{type(e).__name__}: {e}")
                 await asyncio.sleep(1.0)

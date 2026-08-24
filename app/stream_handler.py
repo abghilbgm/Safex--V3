@@ -1,14 +1,6 @@
 """
 stream_handler.py — threaded RTSP frame grabber with automatic reconnect,
 always exposing only the latest frame.
-
-Note on PTZ cameras (e.g. "AG Gate PTZ"): panning/zooming can cause the
-camera's encoder to reset its stream or drop frames momentarily. This is
-normal NVR/camera behavior, not a bug in this code. The reconnect loop
-below handles it automatically (frame read fails -> release -> reopen),
-and the dashboard's per-camera "Reconnect" button (see camera_manager.py
-refresh_camera()) lets you force an immediate manual reconnect if a
-camera seems stuck instead of waiting for the automatic retry.
 """
 import cv2
 import time

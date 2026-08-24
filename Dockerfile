@@ -1,6 +1,3 @@
-# PYTHONUNBUFFERED=1 ensures error output is never lost to buffering inside
-# the container (this + print(flush=True) in app code is why startup
-# failures now show a full traceback in `docker compose logs`).
 FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1

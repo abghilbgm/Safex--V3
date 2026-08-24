@@ -4,7 +4,7 @@
 
 const API = {
   cameras: "/api/cameras", areaGroups: "/api/area-groups", violations: "/api/violations",
-  stats: "/api/stats", rules: "/api/rules",
+  stats: "/api/stats", rules: "/api/rules", syncSeed: "/api/cameras/sync-seed",
 };
 const state = { cameras: [], areaGroups: [], rules: [], wsEventsConnected: false, videoSockets: {} };
 
@@ -22,6 +22,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   setupCameraModal();
   setupGroupsModal();
   setupReconnectAll();
+  setupSyncSeed();
   setInterval(refreshStats, 15000);
   setInterval(refreshCameraStatuses, 8000);
 });
@@ -30,6 +31,54 @@ function startClock() {
   const el = document.getElementById("liveClock");
   const tick = () => { el.textContent = new Date().toLocaleTimeString(); };
   tick(); setInterval(tick, 1000);
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ---------------------------------------------------------------
+// "Sync Default Cameras" button — the fix for cameras missing from
+// the frontend (e.g. only 1 of 16 ever made it into the database
+// because a previous startup crashed/was interrupted mid-seed).
+// Calls POST /api/cameras/sync-seed, which adds any of the 16 cameras
+// defined in app/config.py that are STILL missing from the DB, without
+// touching any camera that already exists. Safe to click any number
+// of times.
+// ---------------------------------------------------------------
+function setupSyncSeed() {
+  const btn = document.getElementById("btnSyncSeed");
+  const statusEl = document.getElementById("syncStatus");
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "Syncing…";
+    statusEl.textContent = "";
+    statusEl.style.color = "var(--accent-green)";
+    try {
+      const res = await fetch(API.syncSeed, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const result = await res.json();
+      if (result.cameras_created > 0) {
+        statusEl.textContent = `✓ Added ${result.cameras_created} missing camera(s): ${result.newly_created_camera_ids.join(", ")}`;
+      } else {
+        statusEl.textContent = `✓ All cameras already present (${result.cameras_already_existed} found) - nothing to add.`;
+      }
+      await loadCameras();
+      await loadAreaGroups();
+    } catch (e) {
+      statusEl.style.color = "var(--accent-red)";
+      statusEl.textContent = `✗ Sync failed: ${e.message}`;
+      console.error("Sync-seed failed:", e);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "⟲ Sync Default Cameras";
+    }
+  });
 }
 
 // ---------------------------------------------------------------
@@ -78,7 +127,7 @@ function renderGroupsTable() {
   const tbody = document.getElementById("groupsTableBody"); tbody.innerHTML = "";
   state.areaGroups.forEach((g) => {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td>${g.name}</td><td>${g.description || "<span style='color:var(--text-dim)'>—</span>"}</td><td>${g.camera_count ?? 0}</td><td><button class="icon-btn danger" data-delete-group="${g.id}">Delete</button></td>`;
+    tr.innerHTML = `<td>${escapeHtml(g.name)}</td><td>${g.description ? escapeHtml(g.description) : "<span style='color:var(--text-dim)'>—</span>"}</td><td>${g.camera_count ?? 0}</td><td><button class="icon-btn danger" data-delete-group="${g.id}">Delete</button></td>`;
     tbody.appendChild(tr);
   });
   tbody.querySelectorAll("[data-delete-group]").forEach((btn) =>
@@ -115,12 +164,6 @@ async function loadCameras() {
   document.getElementById("statCamerasOnline").textContent = `${state.cameras.filter(c => c.connected).length}/${state.cameras.length}`;
 }
 
-function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
-}
-
 function populateViolationCameraFilter() {
   const select = document.getElementById("violationCameraFilter");
   const currentValue = select.value;
@@ -131,11 +174,6 @@ function populateViolationCameraFilter() {
   select.value = currentValue || "";
 }
 
-// FIX: "not all cameras loaded in frontend" - previously a single malformed
-// camera object (or a DOM/template error for one tile) could throw and
-// abort the whole forEach loop, silently skipping every camera after the
-// broken one. Each camera's tile is now built inside its own try/catch so
-// one bad camera can NEVER prevent the rest from rendering.
 function renderFeedsGroupedByArea() {
   const container = document.getElementById("feedsByGroup");
   container.innerHTML = "";
@@ -152,7 +190,7 @@ function renderFeedsGroupedByArea() {
   });
 
   if (!groupNames.length) {
-    container.innerHTML = `<div class="event-empty">No cameras configured yet. Use the Cameras tab to add one.</div>`;
+    container.innerHTML = `<div class="event-empty">No cameras configured yet. Go to the <b>Cameras</b> tab and click "Sync Default Cameras", or add one manually.</div>`;
     return;
   }
 
@@ -169,7 +207,6 @@ function renderFeedsGroupedByArea() {
         grid.appendChild(tile);
         connectVideoStream(cam.camera_id);
       } catch (err) {
-        // A single bad camera must never stop the others from rendering.
         console.error(`Failed to render tile for camera ${cam && cam.camera_id}:`, err);
         const errorTile = document.createElement("div");
         errorTile.className = "camera-tile";
@@ -199,7 +236,7 @@ function buildCameraTile(cam) {
         <div class="tile-status ${cam.connected ? "online" : "offline"}" id="status-${cam.camera_id}">
           <span class="dot"></span><span>${cam.connected ? "ONLINE" : "OFFLINE"}</span>
         </div>
-        <button class="tile-reconnect-btn" data-reconnect-tile="${cam.camera_id}" title="Reconnect this camera (useful for PTZ cameras that pan/zoom)">↻</button>
+        <button class="tile-reconnect-btn" data-reconnect-tile="${cam.camera_id}" title="Reconnect this camera">↻</button>
       </div>
     </div>
   `;
@@ -210,10 +247,6 @@ function buildCameraTile(cam) {
   return tile;
 }
 
-// The per-tile "↻" Reconnect button - forces this ONE camera's stream to
-// restart immediately, without touching any other camera. This is what
-// you want for a PTZ camera that appears "stuck"/reconnecting after it
-// pans - instead of waiting for the automatic backoff retry.
 async function reconnectSingleCamera(cameraId) {
   const btn = document.querySelector(`[data-reconnect-tile="${cameraId}"]`);
   if (btn) { btn.disabled = true; btn.classList.add("spinning"); }
@@ -237,8 +270,6 @@ function setupReconnectAll() {
     btn.disabled = true;
     btn.textContent = "Reconnecting all cameras…";
     try {
-      // Reconnect cameras with a small stagger so we don't hit the backend
-      // with 16 simultaneous stream restarts at once.
       for (const cam of state.cameras) {
         fetch(`${API.cameras}/${cam.camera_id}/refresh`, { method: "POST" }).catch(() => {});
         await new Promise((r) => setTimeout(r, 150));
@@ -441,7 +472,7 @@ function bumpViolationCounter() {
 }
 
 // ---------------------------------------------------------------
-// Violations Gallery Tab - now with clear error state + Retry
+// Violations Gallery Tab
 // ---------------------------------------------------------------
 function setupViolationsGallery() {
   document.getElementById("btnRefreshViolations").addEventListener("click", loadViolationsGallery);
@@ -467,9 +498,6 @@ async function loadViolationsGallery() {
   try {
     const res = await fetch(`${API.violations}?${params.toString()}`);
     if (!res.ok) {
-      // Backend now returns a clear JSON {detail: "..."} on DB errors
-      // (see main.py) instead of an opaque 500 - surface that message
-      // directly instead of a generic "failed to load".
       const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
       throw new Error(err.detail || `HTTP ${res.status}`);
     }

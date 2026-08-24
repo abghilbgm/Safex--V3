@@ -1,6 +1,10 @@
 """
 config.py — central configuration. Cameras/Area Groups are DB-backed after
-first boot; SEED_CAMERAS/SEED_AREA_GROUPS only used when `cameras` is empty.
+first boot; SEED_CAMERAS/SEED_AREA_GROUPS are used to TOP UP any missing
+entries EVERY time the app starts (see db.py sync_seed_data()) - so even
+if a previous run only partially seeded (e.g. crashed halfway through, or
+only 1 of 16 cameras made it in), the missing ones get added automatically
+on the next start, instead of being permanently skipped.
 """
 import os
 from typing import List, Dict
@@ -12,7 +16,8 @@ def _env_bool(key: str, default: bool) -> bool:
     return _env(key, str(default)).lower() in ("1", "true", "yes")
 
 # ---------------------------------------------------------------------------
-# 1. SEED DATA (first-boot only)
+# 1. SEED DATA - synced (topped up) on every startup AND via the dashboard's
+#    "Sync Default Cameras" button / POST /api/cameras/sync-seed
 # ---------------------------------------------------------------------------
 SEED_AREA_GROUPS: List[Dict] = [
     {"name": "Substation",        "description": "High-voltage electrical substation"},
@@ -118,11 +123,6 @@ PG_PORT: int = int(_env("POSTGRES_PORT", "5432"))
 PG_DB: str = _env("POSTGRES_DB", "ppe_compliance")
 PG_USER: str = _env("POSTGRES_USER", "ppe_user")
 PG_PASSWORD: str = _env("POSTGRES_PASSWORD", "ppe_password")
-# IMPORTANT: with many cameras (e.g. 16), each worker occasionally needs a
-# DB connection (violation logging, status updates). A small pool gets
-# exhausted under load, causing camera workers to stall/crash and API
-# requests (like /api/violations) to fail intermittently. Default raised
-# from 10 -> 30 to comfortably support 16+ concurrent camera workers.
 PG_POOL_MIN: int = int(_env("POSTGRES_POOL_MIN", "4"))
 PG_POOL_MAX: int = int(_env("POSTGRES_POOL_MAX", "30"))
 PG_CONNECT_RETRY_SECONDS: int = int(_env("POSTGRES_CONNECT_RETRY_SECONDS", "60"))
@@ -136,9 +136,4 @@ API_HOST: str = _env("PPE_API_HOST", "0.0.0.0")
 API_PORT: int = int(_env("PPE_API_PORT", "8080"))
 JPEG_QUALITY: int = int(_env("PPE_JPEG_QUALITY", "82"))
 BROADCAST_FPS: int = int(_env("PPE_BROADCAST_FPS", "12"))
-# How often (seconds) each camera worker writes its connectivity status to
-# the DB. Previously this ran on EVERY loop iteration (~100x/sec/camera) -
-# with 16 cameras that's up to ~1600 writes/sec, which exhausts small DB
-# pools and causes cascading failures (cameras dropping, violations API
-# failing). Now throttled to once every few seconds per camera.
 CAMERA_STATUS_UPDATE_INTERVAL: float = float(_env("PPE_STATUS_UPDATE_INTERVAL", "4"))

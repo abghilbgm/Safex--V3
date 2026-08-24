@@ -2,14 +2,13 @@
 main.py — FastAPI app: dynamic camera lifecycle, area groups, WebSocket
 video/events, REST API, alert rules CRUD, snapshot image serving.
 
-RELIABILITY NOTE: startup diagnostics use print(..., file=sys.stderr,
-flush=True) directly (not the logging module) so they can never be lost to
-buffering/logging reconfiguration - see db.py for the matching pattern.
-
-Also: /api/violations and /api/stats now wrap their DB calls in try/except
-and return a clear HTTP 503 with a diagnosable message on failure, instead
-of an unhandled 500/connection drop that the frontend could only report as
-a generic "Failed to load violations".
+KEY ENDPOINT for the "cameras missing from frontend" fix:
+  POST /api/cameras/sync-seed
+    Runs db.sync_seed_data() on demand - tops up any of the 16 seed
+    cameras that are missing from the DB (e.g. because a previous
+    startup only partially completed), WITHOUT touching any camera that
+    already exists. Safe to call any number of times. Exposed as a
+    "Sync Default Cameras" button in the dashboard's Cameras tab.
 """
 import os
 import sys
@@ -65,7 +64,6 @@ async def lifespan(app: FastAPI):
                 f"Expected a YOLO model at: {os.path.abspath(config.MODEL_PATH)}\n"
                 f"Fix - run BEFORE starting the app:\n"
                 f"  docker compose run --rm ppe-app python scripts/download_model.py\n"
-                f"  (or locally: python scripts/download_model.py)\n"
                 f"Then restart: docker compose restart ppe-app\n"
                 f"========================================================\n"
             )
@@ -85,9 +83,6 @@ async def lifespan(app: FastAPI):
         _out("STARTUP FAILED - FULL TRACEBACK BELOW")
         _out("!" * 70)
         _out(traceback.format_exc())
-        _out("!" * 70)
-        _out("If the traceback above doesn't explain the issue, run:")
-        _out("  python scripts/check_db_connection.py")
         _out("!" * 70)
         raise
 
@@ -212,6 +207,21 @@ async def add_camera(camera: CameraIn):
     return full
 
 
+@app.post("/api/cameras/sync-seed")
+async def sync_seed_cameras():
+    """Manually tops up any of the 16 seed cameras (from app/config.py)
+    that are missing from the database - WITHOUT touching cameras that
+    already exist. This is the fix for cameras that never made it into
+    the DB during a previous partial/crashed startup. After syncing, any
+    newly-added camera is also started immediately if enabled."""
+    result = await db.sync_seed_data()
+    for camera_id in result["newly_created_camera_ids"]:
+        full = await db.get_camera(camera_id)
+        if full and full["enabled"]:
+            await _camera_manager.start_camera(full)
+    return result
+
+
 @app.put("/api/cameras/{camera_id}")
 async def edit_camera(camera_id: str, update: CameraUpdate):
     existing = await db.get_camera(camera_id)
@@ -239,10 +249,6 @@ async def edit_camera(camera_id: str, update: CameraUpdate):
 
 @app.post("/api/cameras/{camera_id}/refresh")
 async def refresh_camera(camera_id: str):
-    """Manually force a camera's stream to reconnect - used by the dashboard's
-    per-camera 'Reconnect' button (both in the Feeds tab tile and the
-    Cameras tab table). Useful for PTZ cameras or any stream that appears
-    stuck without waiting for the automatic reconnect backoff."""
     ok = await _camera_manager.refresh_camera(camera_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -305,10 +311,6 @@ async def violations(limit: int = 50, camera_id: Optional[str] = None,
     try:
         rows = await db.get_recent_violations(limit, camera_id, violation_type, area_group_id)
     except Exception as e:
-        # Previously an unhandled DB error here (e.g. pool exhaustion from
-        # camera workers hammering the DB) would surface to the frontend as
-        # a generic, undiagnosable "Failed to load violations". Now it's a
-        # clear 503 with the actual cause.
         raise HTTPException(status_code=503, detail=f"Database error while loading violations: {e}")
 
     for row in rows:

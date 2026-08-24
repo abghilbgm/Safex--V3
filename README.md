@@ -5,81 +5,58 @@ WebSocket dashboard, PostgreSQL storage, dynamic camera management with
 area groups, and a database-driven alert rules engine.
 
 Pre-loaded with your **16 real plant cameras**, auto-organized into 9 area
-groups — seeded into the database automatically on first boot.
+groups — synced into the database automatically on every app startup.
 
 ---
 
-## What was fixed in this update
+## Fix: "cameras from config.py not showing in the frontend"
 
-You reported three symptoms after running the previous version:
-1. Not all 16 cameras loading in the frontend
-2. Video "sliding"/showing "Reconnecting…" (especially the PTZ camera)
-3. Violations tab showing "Failed to load violations"
+If you upgraded from an older build and your database only ended up with a
+few cameras (e.g. just CAM02) instead of all 16, here's why and how to fix
+it - **no reinstall or data loss required**.
 
-**All three traced back to one root cause**: the camera worker loop was
-writing to the database on **every single loop tick** (~100x/second per
-camera). With 16 cameras that's up to **~1,600 database writes per
-second**, which exhausts a small connection pool. When the pool is
-exhausted:
-- A camera worker awaiting a DB connection can raise an unhandled
-  exception and silently die → that camera simply stops (never "loads").
-- The same pool exhaustion can cause other API requests (like
-  `/api/violations`) to fail or time out at the exact same moment.
-- Under load, backend responsiveness degrades, which can present as choppy
-  video / repeated reconnects on the frontend, especially noticeable on a
-  PTZ camera whose stream is naturally more prone to brief interruptions
-  when panning/zooming.
+### Why this happens
+`app/config.py` is only a **seed list** — cameras are copied from it into
+PostgreSQL, and the frontend only ever reads from PostgreSQL, never from
+the Python file directly. In an older version, if the seeding process was
+interrupted partway (app crashed, container restarted mid-seed, etc.), any
+camera that hadn't been created yet was **permanently skipped** on future
+restarts. This build fixes that.
 
-### The fixes (all verified with automated tests)
+### The fix
+`sync_seed_data()` (in `app/db.py`) now runs automatically on **every**
+app startup, and separately checks **each individual camera**: if a camera
+from `config.py` is missing from the database, it gets created. If it
+already exists, it's left completely untouched. This makes it self-healing
+— no matter how partial the database state is, restarting the app tops it
+up automatically.
 
-1. **Throttled DB status writes** — `db.update_camera_status()` was called
-   every loop tick; now it's throttled to once every `PPE_STATUS_UPDATE_INTERVAL`
-   seconds per camera (default 4s). Verified: reduced from ~150-300
-   writes/3sec down to 3 writes/3sec in testing — roughly a **100x reduction**.
+### How to fix it right now, 3 ways (easiest first)
 
-2. **Self-healing camera loop** — previously, ANY unexpected error inside a
-   camera's loop (a DB timeout, a decode hiccup) would permanently kill
-   that camera's task with no recovery. Now every loop iteration is wrapped
-   so a transient error is logged and the loop **continues** instead of
-   dying. Verified: a camera worker survives DB errors that previously
-   would have killed it.
+**Option A — Dashboard button (recommended):**
+Open the dashboard → **Cameras** tab → click **"⟲ Sync Default Cameras"**.
+You'll see a confirmation like "Added 15 missing camera(s): CAM01, CAM03, ...".
+The Feeds tab will now show all 16.
 
-3. **Retry-safe violation logging** — a violation is only marked "already
-   logged" **after** its database write succeeds. If the write fails
-   (transient pool exhaustion), the same violation is automatically
-   retried on the next frame instead of being silently lost. Verified: a
-   violation that fails twice then succeeds is correctly saved with no
-   image/record lost.
+**Option B — Just restart the app:**
+```bash
+docker compose restart ppe-app
+docker compose logs -f ppe-app
+```
+Look for this line near the top of the logs:
+```
+[ppe.db] Seed sync: X area group(s) created, Y camera(s) created, Z already existed
+```
 
-4. **One bad camera can't block the rest** — `reconcile_all()` (which
-   starts all cameras at boot) now catches per-camera startup errors
-   individually. Verified: with 16 cameras, if one fails to start, the
-   other 15 still start normally.
-
-5. **Bigger connection pool + Postgres tuning** — default pool raised from
-   10 → 30 connections (`POSTGRES_POOL_MAX` in `.env`), and
-   `docker-compose.yml` now also raises Postgres's own `max_connections`
-   to 100 to match.
-
-6. **Clear, diagnosable errors instead of generic failures** —
-   `/api/violations` and `/api/stats` now return an explicit `503` with the
-   actual error message (e.g. "pool exhausted") instead of an opaque crash
-   the frontend could only describe as "Failed to load violations". The
-   Violations tab now shows that real error message plus a **Retry** button.
-
-### New: per-camera "↻ Reconnect" button in the Feeds tab
-
-Every camera tile in the **Feeds** tab now has a small **↻** button next to
-its status indicator — click it to force *just that camera's* stream to
-reconnect immediately, without affecting any other camera. This is exactly
-what you asked for, and is the fastest fix for a PTZ camera (like "AG Gate
-PTZ") that appears stuck on "Reconnecting…" after it pans — instead of
-waiting for the automatic retry backoff, click ↻ and it reconnects in
-about a second.
-
-There's also a **"↻ Reconnect All Cameras"** button above the feed grid,
-which reconnects every camera with a small stagger (so it doesn't hit the
-backend with 16 simultaneous restarts at once).
+**Option C — API call directly:**
+```bash
+curl -X POST http://localhost:8080/api/cameras/sync-seed
+```
+Then verify:
+```bash
+curl -s http://localhost:8080/api/cameras | python3 -c "import sys,json; print(len(json.load(sys.stdin)))"
+```
+Should print `16`.
 
 ---
 
@@ -94,9 +71,8 @@ docker compose logs -f ppe-app
 Expected startup log:
 ```
 [1/3] Connecting to database...
-PostgreSQL pool ready (postgres:5432/ppe_compliance) pool_size=4-30 after 1 attempt(s)
-No cameras found in DB - seeding from config.SEED_CAMERAS
-Seeded 16 camera(s) and 9 area group(s)
+PostgreSQL pool ready ...
+[ppe.db] Seed sync: 9 area group(s) created, 16 camera(s) created, 0 already existed
 [2/3] Loading detection model ...
 [3/3] Starting camera workers...
 Reconciled 16 camera(s) from DB (16 started)
@@ -104,11 +80,12 @@ STARTUP COMPLETE - application is ready.
 ```
 Open **http://localhost:8080/**.
 
-If something still fails, the full traceback now prints directly and
-immediately in this log — read it, or run:
+If startup fails, the full traceback now prints directly in this log. Also try:
 ```bash
 docker compose exec ppe-app python scripts/check_db_connection.py
 ```
+This tells you exactly how many cameras are in the DB right now, and
+reminds you to run the sync if any are missing.
 
 ---
 
@@ -126,35 +103,39 @@ docker compose exec ppe-app python scripts/check_db_connection.py
 | Facilities | CAM11 |
 | Process | CAM12 |
 
-Editing an RTSP URL later: Dashboard → **Cameras** tab → **Edit** → change
-URL → Save (auto-restarts just that camera).
+**Editing an RTSP URL later:** Dashboard → **Cameras** tab → **Edit** →
+change URL → Save (auto-restarts just that camera).
 
 ---
 
 ## Dashboard Tabs
 
-- **Feeds** — live annotated video grouped by area, with **per-camera
-  Reconnect (↻)** button and a global "Reconnect All Cameras" button
-- **Violations** — image gallery with camera/area/type filters; on load
-  failure now shows the actual error + a Retry button
+- **Feeds** — live annotated video grouped by area, with per-camera
+  Reconnect (↻) button and a global "Reconnect All Cameras" button
+- **Violations** — image gallery with camera/area/type filters; shows the
+  actual error + Retry button if loading fails
 - **Analytics** — hourly trend, violation-type breakdown, by-area-group chart
-- **Cameras** — add / edit (incl. RTSP URL) / refresh / delete cameras;
-  manage area groups
+- **Cameras** — add/edit/refresh/delete cameras; manage area groups;
+  **"⟲ Sync Default Cameras"** button to top up any missing seed cameras
 - **Rules** — create/edit/delete DB-driven alert rules live
 
-## Troubleshooting
+## Other Reliability Fixes in This Build
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| Camera stuck "Reconnecting…" | Normal for PTZ cameras when panning, or a transient network blip | Click the **↻** button on that camera's tile in the Feeds tab |
-| Several cameras never load | Was: DB pool exhaustion killing camera workers | Fixed in this version (throttled writes + self-healing loop + bigger pool) - if it persists, run `check_db_connection.py` to check pool usage |
-| Violations tab: "Could not load violations" | DB error - now shown with the actual message | Read the specific error shown, or click **Retry**; check `docker compose logs postgres` for DB-side issues |
-| "Application startup failed. Exiting." | Now shows full traceback in logs | Read `docker compose logs -f ppe-app`; run `scripts/check_db_connection.py` |
+- Throttled DB status writes (was every loop tick per camera, now once
+  every few seconds) — prevents connection pool exhaustion with many cameras
+- Self-healing camera loop — a transient error no longer permanently kills
+  a camera's worker
+- Retry-safe violation logging — a violation that fails to save is retried
+  on the next frame instead of being lost
+- One camera failing to start no longer blocks the other 15 from starting
+- `/api/violations` and `/api/stats` return a clear error message on DB
+  failure instead of a generic "Failed to load"
 
 ## Camera Management API
 ```
 GET/POST/PUT/DELETE /api/cameras[/{camera_id}]
-POST /api/cameras/{camera_id}/refresh   # force reconnect (used by the ↻ button)
+POST /api/cameras/{camera_id}/refresh   # force reconnect
+POST /api/cameras/sync-seed              # top up missing seed cameras
 GET/POST/PUT/DELETE /api/area-groups
 GET/POST/PUT/DELETE /api/rules
 ```
@@ -169,13 +150,13 @@ python powerbi/build_powerbi_dataset.py --host localhost --db ppe_compliance --u
 ppe_compliance_system/
 ├── README.md
 ├── app/
-│   ├── config.py               # SEED_CAMERAS (16 cams) + tunables incl. pool size, status-update interval
-│   ├── db.py                     # PostgreSQL + connection retry
-│   ├── camera_manager.py          # dynamic lifecycle + SELF-HEALING loop + throttled writes (this update's main fix)
+│   ├── config.py               # SEED_CAMERAS (16 cams) + SEED_AREA_GROUPS + tunables
+│   ├── db.py                     # PostgreSQL + sync_seed_data() (the missing-cameras fix)
+│   ├── camera_manager.py          # dynamic lifecycle, self-healing loop, throttled writes
 │   ├── stream_handler.py, detector.py, compliance_engine.py
 │   ├── rules_engine.py, alert_manager.py, ws_hub.py
-│   └── main.py                     # FastAPI; /api/violations & /api/stats now return clear 503s on DB errors
-├── dashboard/                        # SPA incl. new per-camera Reconnect button + error states with Retry
+│   └── main.py                     # FastAPI incl. POST /api/cameras/sync-seed
+├── dashboard/                        # SPA incl. "Sync Default Cameras" + per-camera Reconnect buttons
 ├── scripts/                           # download_model, train, seed_rules, quick_test, check_db_connection
 ├── powerbi/
 ├── requirements.txt, Dockerfile, docker-compose.yml, .env.example

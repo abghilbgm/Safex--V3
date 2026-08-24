@@ -1,7 +1,18 @@
 """
 db.py — async PostgreSQL data layer (asyncpg, connection-pooled).
-Retries the initial connection for up to PG_CONNECT_RETRY_SECONDS before
-raising a clear, actionable RuntimeError.
+
+`sync_seed_data()` is the fix for cameras silently missing from the
+frontend: it runs on EVERY app startup AND is exposed via
+POST /api/cameras/sync-seed (a dashboard button), and works per-camera:
+  - ensures every area group in SEED_AREA_GROUPS exists (create if missing)
+  - for each camera in SEED_CAMERAS, if its camera_id does NOT already
+    exist in the DB, create it. Existing cameras (including ones you've
+    manually edited) are left completely untouched.
+This makes seeding idempotent and self-healing: no matter how many times
+it runs, or how the DB got into a partial state (e.g. only 1 of 16
+cameras made it in during a previous crashed/interrupted run), every seed
+camera that is still missing gets added, and nothing that already exists
+gets touched or duplicated.
 """
 import asyncio
 import logging
@@ -115,7 +126,10 @@ async def init_pool():
                 await conn.execute(SCHEMA)
             _print_flush(f"[ppe.db] PostgreSQL pool ready ({config.PG_HOST}:{config.PG_PORT}/{config.PG_DB}) "
                          f"pool_size={config.PG_POOL_MIN}-{config.PG_POOL_MAX} after {attempt} attempt(s)")
-            await _seed_if_empty()
+            result = await sync_seed_data()
+            _print_flush(f"[ppe.db] Seed sync: {result['groups_created']} area group(s) created, "
+                         f"{result['cameras_created']} camera(s) created, "
+                         f"{result['cameras_already_existed']} already existed")
             return _pool
         except Exception as e:
             last_error = e
@@ -149,25 +163,45 @@ def get_pool() -> asyncpg.Pool:
     return _pool
 
 
-async def _seed_if_empty():
-    existing_cameras = await list_cameras()
-    if existing_cameras:
-        _print_flush(f"[ppe.db] {len(existing_cameras)} camera(s) already in DB - skipping seed")
-        return
+async def sync_seed_data() -> Dict[str, Any]:
+    """Idempotent top-up: creates any area group / camera from
+    config.SEED_AREA_GROUPS / config.SEED_CAMERAS that doesn't already
+    exist (matched by name / camera_id respectively). Never touches or
+    duplicates anything that already exists. Safe to call any number of
+    times - at startup, and on-demand via POST /api/cameras/sync-seed."""
+    groups_created = 0
+    cameras_created = 0
 
-    _print_flush("[ppe.db] No cameras found in DB - seeding from config.SEED_CAMERAS")
-    group_name_to_id = {}
+    existing_groups = await list_area_groups()
+    group_name_to_id = {g["name"]: g["id"] for g in existing_groups}
+
     for group in config.SEED_AREA_GROUPS:
-        row = await create_area_group(group["name"], group.get("description", ""))
-        group_name_to_id[group["name"]] = row["id"]
+        if group["name"] not in group_name_to_id:
+            row = await create_area_group(group["name"], group.get("description", ""))
+            group_name_to_id[group["name"]] = row["id"]
+            groups_created += 1
+
+    existing_cameras = await list_cameras()
+    existing_camera_ids = {c["camera_id"] for c in existing_cameras}
+    newly_created_camera_ids: List[str] = []
 
     for cam in config.SEED_CAMERAS:
+        if cam["camera_id"] in existing_camera_ids:
+            continue
         area_group_id = group_name_to_id.get(cam.get("area_group_name"))
         await create_camera(
             cam["camera_id"], cam["name"], cam["rtsp_url"], area_group_id,
             cam.get("required_ppe", ["helmet", "vest"]),
         )
-    _print_flush(f"[ppe.db] Seeded {len(config.SEED_CAMERAS)} camera(s) and {len(config.SEED_AREA_GROUPS)} area group(s)")
+        cameras_created += 1
+        newly_created_camera_ids.append(cam["camera_id"])
+
+    return {
+        "groups_created": groups_created,
+        "cameras_created": cameras_created,
+        "cameras_already_existed": len(existing_camera_ids),
+        "newly_created_camera_ids": newly_created_camera_ids,
+    }
 
 
 async def list_area_groups() -> List[Dict[str, Any]]:
