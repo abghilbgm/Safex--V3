@@ -1,4 +1,9 @@
+# PYTHONUNBUFFERED=1 ensures error output is never lost to buffering inside
+# the container (this + print(flush=True) in app code is why startup
+# failures now show a full traceback in `docker compose logs`).
 FROM python:3.11-slim
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg libsm6 libxext6 libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
@@ -13,4 +18,4 @@ ENV PPE_MODEL_PATH=/app/models/best.pt
 ENV PPE_API_HOST=0.0.0.0
 ENV PPE_API_PORT=8080
 EXPOSE 8080
-CMD ["python", "-m", "app.main"]
+CMD ["python", "-u", "-m", "app.main"]

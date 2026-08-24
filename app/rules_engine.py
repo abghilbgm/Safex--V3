@@ -38,8 +38,11 @@ class RulesEngine:
 
     async def _refresh_if_needed(self):
         if time.time() - self._last_refresh >= self.refresh_interval or not self._rules_cache:
-            self._rules_cache = await db.list_rules(enabled_only=True)
-            self._last_refresh = time.time()
+            try:
+                self._rules_cache = await db.list_rules(enabled_only=True)
+                self._last_refresh = time.time()
+            except Exception as e:
+                logger.warning(f"Could not refresh rules cache (using stale cache): {e}")
 
     async def force_refresh(self):
         self._rules_cache = await db.list_rules(enabled_only=True)

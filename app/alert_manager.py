@@ -42,11 +42,18 @@ class AlertManager:
         label = _VIOLATION_LABELS.get(violation_type, violation_type)
         for match in matches:
             for channel in match.channels:
-                success = await self._dispatch(channel, camera_name, zone, label,
-                                                 match.email_recipients, snapshot_path)
-                await db.log_alert_dispatch(violation_id, match.rule_id, channel, success)
+                try:
+                    success = await self._dispatch(channel, camera_name, zone, label,
+                                                     match.email_recipients, snapshot_path)
+                    await db.log_alert_dispatch(violation_id, match.rule_id, channel, success)
+                except Exception as e:
+                    logger.warning(f"Alert dispatch/logging failed for rule={match.rule_id} "
+                                    f"channel={channel} (violation still saved): {e}")
 
-        await db.mark_alert_dispatched(violation_id)
+        try:
+            await db.mark_alert_dispatched(violation_id)
+        except Exception as e:
+            logger.warning(f"Could not mark violation {violation_id} as alert_dispatched: {e}")
         return matches
 
     async def _dispatch(self, channel, camera_name, zone, label, email_recipients, snapshot_path) -> bool:

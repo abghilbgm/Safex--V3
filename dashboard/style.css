@@ -36,6 +36,8 @@ body { background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparen
 .tab-btn:hover:not(.active) { color: var(--text-primary); }
 .tab-content { display: none; }
 .tab-content.active { display: block; }
+.feeds-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; flex-wrap: wrap; }
+.feeds-hint { font-size: 11.5px; color: var(--text-dim); }
 .feed-group { margin-bottom: 26px; }
 .feed-group:last-child { margin-bottom: 0; }
 .feed-group-header { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border-subtle); }
@@ -46,7 +48,7 @@ body { background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparen
 .camera-tile .feed-wrap { position: relative; aspect-ratio: 16 / 9; background: #05070a; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .camera-tile canvas { width: 100%; height: 100%; object-fit: contain; display: block; }
 .feed-placeholder { color: var(--text-dim); font-family: var(--font-mono); font-size: 12px; text-align: center; }
-.camera-tile .tile-footer { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-top: 1px solid var(--border-subtle); }
+.camera-tile .tile-footer { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-top: 1px solid var(--border-subtle); gap: 8px; }
 .tile-cam-name { font-size: 13px; font-weight: 600; }
 .tile-cam-zone { font-size: 11px; color: var(--text-dim); margin-left: 6px; }
 .tile-status { display: flex; align-items: center; gap: 6px; font-size: 11px; font-family: var(--font-mono); }
@@ -54,6 +56,16 @@ body { background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparen
 .tile-status.online .dot { background: var(--accent-green); box-shadow: 0 0 6px rgba(51,209,122,0.6); }
 .tile-status.online { color: var(--accent-green); }
 .tile-status.offline { color: var(--accent-red); }
+.tile-actions { display: flex; align-items: center; gap: 6px; }
+.tile-reconnect-btn {
+  background: var(--bg-void); border: 1px solid var(--border-strong); color: var(--accent-cyan);
+  border-radius: 6px; padding: 4px 9px; font-size: 11px; cursor: pointer; white-space: nowrap;
+  transition: all 0.15s;
+}
+.tile-reconnect-btn:hover { border-color: var(--accent-cyan); background: rgba(41,211,217,0.1); }
+.tile-reconnect-btn:disabled { opacity: 0.5; cursor: wait; }
+.tile-reconnect-btn.spinning { animation: spin-icon 0.8s linear infinite; }
+@keyframes spin-icon { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .violation-flash { position: absolute; inset: 0; border: 3px solid var(--accent-red); box-shadow: inset 0 0 40px var(--accent-red-glow); opacity: 0; pointer-events: none; transition: opacity 0.25s; }
 .violation-flash.active { opacity: 1; animation: flash-pulse 1s ease-in-out; }
 @keyframes flash-pulse { 0% { opacity: 0.9; } 50% { opacity: 0.3; } 100% { opacity: 0; } }
@@ -71,6 +83,9 @@ body { background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparen
 .violation-card .card-meta { padding: 8px 10px; }
 .violation-card .card-cam { font-size: 12px; font-weight: 600; }
 .violation-card .card-time { font-size: 10.5px; color: var(--text-dim); font-family: var(--font-mono); margin-top: 2px; }
+.error-state { text-align: center; padding: 30px 20px; color: var(--accent-red); }
+.error-state .error-detail { font-size: 11px; color: var(--text-dim); margin-top: 8px; font-family: var(--font-mono); word-break: break-word; }
+.error-state button { margin-top: 14px; }
 .analytics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .card { background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 16px; }
 .card.wide { grid-column: 1 / -1; }
@@ -101,6 +116,7 @@ body { background-image: linear-gradient(rgba(255,255,255,0.015) 1px, transparen
 .btn-primary:hover { filter: brightness(1.1); }
 .btn-secondary { background: transparent; border: 1px solid var(--border-strong); color: var(--text-secondary); padding: 8px 16px; border-radius: 7px; cursor: pointer; font-size: 12.5px; }
 .btn-secondary:hover { color: var(--text-primary); }
+.btn-secondary:disabled { opacity: 0.5; cursor: wait; }
 .event-panel { background: var(--bg-panel); border: 1px solid var(--border-subtle); border-radius: var(--radius); padding: 20px; display: flex; flex-direction: column; min-height: 0; }
 .live-badge { color: var(--accent-red); font-size: 10.5px; font-weight: 700; letter-spacing: 1px; animation: blink-live 1.6s infinite; }
 @keyframes blink-live { 0%,100% { opacity:1; } 50% { opacity:0.35; } }

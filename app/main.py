@@ -1,21 +1,21 @@
 """
-main.py — FastAPI app: dynamic camera lifecycle (add/edit/refresh/delete
-from the dashboard), area groups, WebSocket video/events, REST API, alert
-rules CRUD, and snapshot image serving.
+main.py — FastAPI app: dynamic camera lifecycle, area groups, WebSocket
+video/events, REST API, alert rules CRUD, snapshot image serving.
 
-IMPORTANT: the lifespan() function below wraps startup in a try/except that
-logs the FULL exception traceback via logger.exception(...) before
-re-raising. This is what makes startup failures actually diagnosable -
-without it, Uvicorn's default behavior is to print only the terse
-"ERROR: Application startup failed. Exiting." line and swallow the real
-underlying error.
+RELIABILITY NOTE: startup diagnostics use print(..., file=sys.stderr,
+flush=True) directly (not the logging module) so they can never be lost to
+buffering/logging reconfiguration - see db.py for the matching pattern.
+
+Also: /api/violations and /api/stats now wrap their DB calls in try/except
+and return a clear HTTP 503 with a diagnosable message on failure, instead
+of an unhandled 500/connection drop that the frontend could only report as
+a generic "Failed to load violations".
 """
 import os
 import sys
 import time
 import json
 import asyncio
-import logging
 import traceback
 from contextlib import asynccontextmanager
 from typing import Dict, Optional, List
@@ -32,8 +32,10 @@ from .alert_manager import AlertManager
 from .camera_manager import CameraManager
 from .ws_hub import hub
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-logger = logging.getLogger("ppe.main")
+
+def _out(msg: str):
+    print(msg, file=sys.stderr, flush=True)
+
 
 _detector: Optional[PPEDetector] = None
 _alert_manager = AlertManager()
@@ -47,39 +49,46 @@ def _get_detector():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
-        logger.info("Starting up: connecting to database...")
+        _out("=" * 70)
+        _out("SENTINEL PPE COMPLIANCE SYSTEM - STARTING UP")
+        _out("=" * 70)
+        _out("[1/3] Connecting to database...")
         await db.init_pool()
 
         os.makedirs(config.SNAPSHOT_DIR, exist_ok=True)
 
         global _detector, _camera_manager
-        logger.info(f"Loading detection model from {config.MODEL_PATH} ...")
+        _out(f"[2/3] Loading detection model from {os.path.abspath(config.MODEL_PATH)} ...")
         if not os.path.isfile(config.MODEL_PATH):
             raise FileNotFoundError(
-                f"\n\n"
-                f"================ MODEL FILE NOT FOUND ================\n"
+                f"\n\n================ MODEL FILE NOT FOUND ================\n"
                 f"Expected a YOLO model at: {os.path.abspath(config.MODEL_PATH)}\n"
-                f"This file does not exist yet.\n\n"
-                f"Fix: run this BEFORE starting the app:\n"
-                f"  python scripts/download_model.py\n"
-                f"(or, if using Docker: place best.pt in the ./models folder\n"
-                f" on your host machine before 'docker compose up')\n"
+                f"Fix - run BEFORE starting the app:\n"
+                f"  docker compose run --rm ppe-app python scripts/download_model.py\n"
+                f"  (or locally: python scripts/download_model.py)\n"
+                f"Then restart: docker compose restart ppe-app\n"
                 f"========================================================\n"
             )
         _detector = PPEDetector()
+        _out("      Model loaded successfully.")
 
+        _out("[3/3] Starting camera workers...")
         _camera_manager = CameraManager(_get_detector, _alert_manager)
         await _camera_manager.reconcile_all()
 
-        logger.info("Startup complete - application is ready.")
+        _out("=" * 70)
+        _out("STARTUP COMPLETE - application is ready.")
+        _out("=" * 70)
 
-    except Exception:
-        # Print the FULL traceback, not just Uvicorn's generic one-liner.
-        logger.error("=" * 70)
-        logger.error("STARTUP FAILED - full traceback below:")
-        logger.error("=" * 70)
-        logger.error(traceback.format_exc())
-        logger.error("=" * 70)
+    except BaseException:
+        _out("!" * 70)
+        _out("STARTUP FAILED - FULL TRACEBACK BELOW")
+        _out("!" * 70)
+        _out(traceback.format_exc())
+        _out("!" * 70)
+        _out("If the traceback above doesn't explain the issue, run:")
+        _out("  python scripts/check_db_connection.py")
+        _out("!" * 70)
         raise
 
     yield
@@ -156,8 +165,12 @@ class CameraUpdate(BaseModel):
 
 @app.get("/api/cameras")
 async def list_cameras():
-    cameras = await db.list_cameras()
-    statuses = {s["camera_id"]: s for s in await db.get_camera_statuses()}
+    try:
+        cameras = await db.list_cameras()
+        statuses = {s["camera_id"]: s for s in await db.get_camera_statuses()}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error while listing cameras: {e}")
+
     out = []
     for cam in cameras:
         persisted = statuses.get(cam["camera_id"], {})
@@ -226,6 +239,10 @@ async def edit_camera(camera_id: str, update: CameraUpdate):
 
 @app.post("/api/cameras/{camera_id}/refresh")
 async def refresh_camera(camera_id: str):
+    """Manually force a camera's stream to reconnect - used by the dashboard's
+    per-camera 'Reconnect' button (both in the Feeds tab tile and the
+    Cameras tab table). Useful for PTZ cameras or any stream that appears
+    stuck without waiting for the automatic reconnect backoff."""
     ok = await _camera_manager.refresh_camera(camera_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -254,7 +271,10 @@ class AreaGroupUpdate(BaseModel):
 
 @app.get("/api/area-groups")
 async def list_area_groups():
-    return await db.list_area_groups()
+    try:
+        return await db.list_area_groups()
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error while listing area groups: {e}")
 
 
 @app.post("/api/area-groups")
@@ -282,7 +302,15 @@ async def remove_area_group(group_id: int):
 @app.get("/api/violations")
 async def violations(limit: int = 50, camera_id: Optional[str] = None,
                       violation_type: Optional[str] = None, area_group_id: Optional[int] = None):
-    rows = await db.get_recent_violations(limit, camera_id, violation_type, area_group_id)
+    try:
+        rows = await db.get_recent_violations(limit, camera_id, violation_type, area_group_id)
+    except Exception as e:
+        # Previously an unhandled DB error here (e.g. pool exhaustion from
+        # camera workers hammering the DB) would surface to the frontend as
+        # a generic, undiagnosable "Failed to load violations". Now it's a
+        # clear 503 with the actual cause.
+        raise HTTPException(status_code=503, detail=f"Database error while loading violations: {e}")
+
     for row in rows:
         row["snapshot_url"] = f"/api/snapshot/{row['id']}" if row.get("snapshot_path") else None
     return JSONResponse(rows)
@@ -290,7 +318,10 @@ async def violations(limit: int = 50, camera_id: Optional[str] = None,
 
 @app.get("/api/stats")
 async def stats(window_hours: int = 24):
-    return JSONResponse(await db.get_compliance_stats(window_hours))
+    try:
+        return JSONResponse(await db.get_compliance_stats(window_hours))
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error while loading stats: {e}")
 
 
 @app.get("/api/export/violations.csv")
@@ -345,7 +376,10 @@ class RuleUpdate(BaseModel):
 
 @app.get("/api/rules")
 async def get_rules():
-    return JSONResponse(await db.list_rules())
+    try:
+        return JSONResponse(await db.list_rules())
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Database error while loading rules: {e}")
 
 
 @app.post("/api/rules")
@@ -378,7 +412,15 @@ async def remove_rule(rule_id: int):
 
 
 def run():
-    uvicorn.run(app, host=config.API_HOST, port=config.API_PORT)
+    try:
+        uvicorn.run(app, host=config.API_HOST, port=config.API_PORT)
+    except BaseException:
+        _out("!" * 70)
+        _out("UVICORN FAILED TO START. Full traceback:")
+        _out("!" * 70)
+        _out(traceback.format_exc())
+        _out("!" * 70)
+        raise
 
 
 if __name__ == "__main__":

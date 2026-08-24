@@ -1,15 +1,6 @@
 """
-config.py
----------
-Central configuration. Cameras and Area Groups are DYNAMIC - managed via
-the dashboard's Cameras tab and stored in PostgreSQL (`cameras` and
-`area_groups` tables), NOT hardcoded here after first boot.
-
-SEED_CAMERAS / SEED_AREA_GROUPS below are used ONLY on first startup, if
-the `cameras` table is empty, to bootstrap your real plant cameras. After
-that, all camera add/edit/delete/refresh operations go through the
-dashboard or /api/cameras - editing this file again has no effect unless
-you wipe the database and restart.
+config.py — central configuration. Cameras/Area Groups are DB-backed after
+first boot; SEED_CAMERAS/SEED_AREA_GROUPS only used when `cameras` is empty.
 """
 import os
 from typing import List, Dict
@@ -21,7 +12,7 @@ def _env_bool(key: str, default: bool) -> bool:
     return _env(key, str(default)).lower() in ("1", "true", "yes")
 
 # ---------------------------------------------------------------------------
-# 1. SEED DATA (first-boot only, if the `cameras` table is empty)
+# 1. SEED DATA (first-boot only)
 # ---------------------------------------------------------------------------
 SEED_AREA_GROUPS: List[Dict] = [
     {"name": "Substation",        "description": "High-voltage electrical substation"},
@@ -35,8 +26,6 @@ SEED_AREA_GROUPS: List[Dict] = [
     {"name": "Process",                   "description": "Chemical process areas (e.g. Caustic)"},
 ]
 
-# Your 16 real plant cameras. `area_group_name` must exactly match a `name`
-# in SEED_AREA_GROUPS above so the seeder can link them correctly.
 SEED_CAMERAS: List[Dict] = [
     {"camera_id": "CAM01", "name": "CAM01", "rtsp_url": "rtsp://admin:mngr%402025@192.169.0.65:554/Streaming/Channels/101",
      "area_group_name": "Substation", "required_ppe": ["helmet", "vest"]},
@@ -110,7 +99,7 @@ MATCH_OVERLAP_THRESHOLD: float = 0.30
 VIOLATION_CONFIRM_FRAMES: int = int(_env("PPE_VIOLATION_CONFIRM_FRAMES", "5"))
 
 # ---------------------------------------------------------------------------
-# 5. ALERTING (channel credentials only - conditions live in alert_rules)
+# 5. ALERTING
 # ---------------------------------------------------------------------------
 ALERTS_ENABLED: bool = _env_bool("PPE_ALERTS_ENABLED", True)
 TEAMS_WEBHOOK_URL: str = _env("PPE_TEAMS_WEBHOOK", "")
@@ -129,13 +118,13 @@ PG_PORT: int = int(_env("POSTGRES_PORT", "5432"))
 PG_DB: str = _env("POSTGRES_DB", "ppe_compliance")
 PG_USER: str = _env("POSTGRES_USER", "ppe_user")
 PG_PASSWORD: str = _env("POSTGRES_PASSWORD", "ppe_password")
-PG_POOL_MIN: int = int(_env("POSTGRES_POOL_MIN", "2"))
-PG_POOL_MAX: int = int(_env("POSTGRES_POOL_MAX", "10"))
-# How long (seconds) to keep retrying the initial DB connection before
-# giving up. This is the #1 fix for "Application startup failed. Exiting."
-# in Docker: the app container can start slightly before Postgres is fully
-# ready to accept connections, especially on first-ever startup when
-# Postgres is still initializing its data directory.
+# IMPORTANT: with many cameras (e.g. 16), each worker occasionally needs a
+# DB connection (violation logging, status updates). A small pool gets
+# exhausted under load, causing camera workers to stall/crash and API
+# requests (like /api/violations) to fail intermittently. Default raised
+# from 10 -> 30 to comfortably support 16+ concurrent camera workers.
+PG_POOL_MIN: int = int(_env("POSTGRES_POOL_MIN", "4"))
+PG_POOL_MAX: int = int(_env("POSTGRES_POOL_MAX", "30"))
 PG_CONNECT_RETRY_SECONDS: int = int(_env("POSTGRES_CONNECT_RETRY_SECONDS", "60"))
 
 SNAPSHOT_DIR: str = _env("PPE_SNAPSHOT_DIR", "snapshots")
@@ -147,3 +136,9 @@ API_HOST: str = _env("PPE_API_HOST", "0.0.0.0")
 API_PORT: int = int(_env("PPE_API_PORT", "8080"))
 JPEG_QUALITY: int = int(_env("PPE_JPEG_QUALITY", "82"))
 BROADCAST_FPS: int = int(_env("PPE_BROADCAST_FPS", "12"))
+# How often (seconds) each camera worker writes its connectivity status to
+# the DB. Previously this ran on EVERY loop iteration (~100x/sec/camera) -
+# with 16 cameras that's up to ~1600 writes/sec, which exhausts small DB
+# pools and causes cascading failures (cameras dropping, violations API
+# failing). Now throttled to once every few seconds per camera.
+CAMERA_STATUS_UPDATE_INTERVAL: float = float(_env("PPE_STATUS_UPDATE_INTERVAL", "4"))

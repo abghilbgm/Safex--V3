@@ -1,12 +1,10 @@
-"""quick_test.py - visually verify PPE detection on ONE camera, no DB needed.
-Usage: python scripts/quick_test.py --source "rtsp://admin:pass@ip:554/..."
-"""
+"""quick_test.py - visually verify PPE detection on ONE camera, no DB needed."""
 import sys, os
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_THIS_DIR)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
-import argparse, time, cv2
+import argparse, cv2
 from app.detector import PPEDetector
 from app.compliance_engine import ComplianceEngine
 from app import config
@@ -33,7 +31,7 @@ def main():
     if source.isdigit(): source = int(source)
     if isinstance(source, str) and source.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
         frame = cv2.imread(source)
-        if frame is None: print(f"ERROR: could not read image {source}"); return
+        if frame is None: print(f"ERROR: could not read {source}"); return
         detections = detector.infer(frame)
         for _ in range(config.VIOLATION_CONFIRM_FRAMES): statuses = engine.evaluate(detections)
         cv2.imwrite("quick_test_output.jpg", draw(frame.copy(), statuses))
@@ -41,7 +39,7 @@ def main():
     print(f"Connecting to {source} ...")
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
-        print("ERROR: could not open source. Check RTSP URL, credentials, network, firewall."); return
+        print("ERROR: could not open source. Check RTSP URL/credentials/network/firewall."); return
     print("Connected! Press 'q' to quit.")
     frame_count = 0; last_statuses = []
     while True:

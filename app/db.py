@@ -1,16 +1,11 @@
 """
 db.py — async PostgreSQL data layer (asyncpg, connection-pooled).
-Compatible with PostgreSQL 12-16 (including your PG 14).
-
-IMPORTANT: init_pool() retries the connection for PG_CONNECT_RETRY_SECONDS
-before giving up. This is the fix for "Application startup failed. Exiting."
-- in Docker Compose, the app container can start a few seconds before
-Postgres is actually ready to accept connections (even with a healthcheck +
-depends_on, there's a small race window), so a bare, no-retry connection
-attempt can fail on the very first try.
+Retries the initial connection for up to PG_CONNECT_RETRY_SECONDS before
+raising a clear, actionable RuntimeError.
 """
 import asyncio
 import logging
+import sys
 import time
 from typing import Optional, List, Dict, Any
 
@@ -97,11 +92,11 @@ CREATE TABLE IF NOT EXISTS alert_dispatch_log (
 _pool: Optional[asyncpg.Pool] = None
 
 
+def _print_flush(msg: str):
+    print(msg, file=sys.stderr, flush=True)
+
+
 async def init_pool():
-    """Creates the connection pool, RETRYING for up to
-    config.PG_CONNECT_RETRY_SECONDS if Postgres isn't ready yet. This is
-    what prevents 'Application startup failed. Exiting.' from a transient
-    race at container startup."""
     global _pool
     deadline = time.time() + config.PG_CONNECT_RETRY_SECONDS
     attempt = 0
@@ -111,57 +106,36 @@ async def init_pool():
         attempt += 1
         try:
             _pool = await asyncpg.create_pool(
-                host=config.PG_HOST,
-                port=config.PG_PORT,
-                database=config.PG_DB,
-                user=config.PG_USER,
-                password=config.PG_PASSWORD,
-                min_size=config.PG_POOL_MIN,
-                max_size=config.PG_POOL_MAX,
+                host=config.PG_HOST, port=config.PG_PORT, database=config.PG_DB,
+                user=config.PG_USER, password=config.PG_PASSWORD,
+                min_size=config.PG_POOL_MIN, max_size=config.PG_POOL_MAX,
                 timeout=10,
             )
             async with _pool.acquire() as conn:
                 await conn.execute(SCHEMA)
-            logger.info(f"PostgreSQL pool ready ({config.PG_HOST}:{config.PG_PORT}/{config.PG_DB}) "
-                        f"after {attempt} attempt(s)")
+            _print_flush(f"[ppe.db] PostgreSQL pool ready ({config.PG_HOST}:{config.PG_PORT}/{config.PG_DB}) "
+                         f"pool_size={config.PG_POOL_MIN}-{config.PG_POOL_MAX} after {attempt} attempt(s)")
             await _seed_if_empty()
             return _pool
         except Exception as e:
             last_error = e
-            logger.warning(
-                f"[attempt {attempt}] Could not connect to PostgreSQL at "
+            _print_flush(
+                f"[ppe.db] [attempt {attempt}] Could not connect to PostgreSQL at "
                 f"{config.PG_HOST}:{config.PG_PORT}/{config.PG_DB} - {type(e).__name__}: {e}. "
                 f"Retrying in 3s... (giving up after {config.PG_CONNECT_RETRY_SECONDS}s total)"
             )
             await asyncio.sleep(3)
 
-    # Ran out of time - raise a CLEAR, actionable error instead of letting
-    # uvicorn print the generic "Application startup failed. Exiting."
-    raise RuntimeError(
-        f"\n\n"
-        f"================ DATABASE CONNECTION FAILED ================\n"
+    error_msg = (
+        f"\n\n================ DATABASE CONNECTION FAILED ================\n"
         f"Could not connect to PostgreSQL after {attempt} attempts over "
         f"{config.PG_CONNECT_RETRY_SECONDS} seconds.\n"
-        f"  Host:     {config.PG_HOST}\n"
-        f"  Port:     {config.PG_PORT}\n"
-        f"  Database: {config.PG_DB}\n"
-        f"  User:     {config.PG_USER}\n"
-        f"Last error: {type(last_error).__name__}: {last_error}\n\n"
-        f"Common causes:\n"
-        f"  1. Postgres container/service isn't running yet or crashed -\n"
-        f"     run: docker compose ps    (check 'postgres' status/health)\n"
-        f"     run: docker compose logs postgres\n"
-        f"  2. Wrong POSTGRES_HOST in .env - if running via docker-compose,\n"
-        f"     this MUST be 'postgres' (the service name), NOT 'localhost'.\n"
-        f"  3. Wrong POSTGRES_PASSWORD/POSTGRES_USER/POSTGRES_DB in .env -\n"
-        f"     must match what Postgres was actually initialized with.\n"
-        f"     NOTE: changing these in .env after the Postgres data volume\n"
-        f"     already exists has NO EFFECT - Postgres only reads them on\n"
-        f"     first-ever initialization. If you changed credentials, run:\n"
-        f"       docker compose down -v   (WARNING: wipes existing data)\n"
-        f"       docker compose up -d --build\n"
+        f"  Host: {config.PG_HOST}  Port: {config.PG_PORT}  DB: {config.PG_DB}  User: {config.PG_USER}\n"
+        f"Last error: {type(last_error).__name__}: {last_error}\n"
         f"==============================================================\n"
-    ) from last_error
+    )
+    _print_flush(error_msg)
+    raise RuntimeError(error_msg) from last_error
 
 
 async def close_pool():
@@ -176,15 +150,12 @@ def get_pool() -> asyncpg.Pool:
 
 
 async def _seed_if_empty():
-    """First-boot convenience: if the cameras table is empty, populate it
-    from config.SEED_CAMERAS / SEED_AREA_GROUPS. After this, all camera
-    management happens via the dashboard/API."""
     existing_cameras = await list_cameras()
     if existing_cameras:
-        logger.info(f"{len(existing_cameras)} camera(s) already in DB - skipping seed")
+        _print_flush(f"[ppe.db] {len(existing_cameras)} camera(s) already in DB - skipping seed")
         return
 
-    logger.info("No cameras found in DB - seeding from config.SEED_CAMERAS")
+    _print_flush("[ppe.db] No cameras found in DB - seeding from config.SEED_CAMERAS")
     group_name_to_id = {}
     for group in config.SEED_AREA_GROUPS:
         row = await create_area_group(group["name"], group.get("description", ""))
@@ -196,12 +167,9 @@ async def _seed_if_empty():
             cam["camera_id"], cam["name"], cam["rtsp_url"], area_group_id,
             cam.get("required_ppe", ["helmet", "vest"]),
         )
-    logger.info(f"Seeded {len(config.SEED_CAMERAS)} camera(s) and {len(config.SEED_AREA_GROUPS)} area group(s)")
+    _print_flush(f"[ppe.db] Seeded {len(config.SEED_CAMERAS)} camera(s) and {len(config.SEED_AREA_GROUPS)} area group(s)")
 
 
-# ---------------------------------------------------------------------------
-# Area Groups
-# ---------------------------------------------------------------------------
 async def list_area_groups() -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         rows = await conn.fetch(
@@ -242,9 +210,6 @@ async def delete_area_group(group_id: int) -> bool:
         return result.endswith("1")
 
 
-# ---------------------------------------------------------------------------
-# Cameras
-# ---------------------------------------------------------------------------
 async def list_cameras() -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:
         rows = await conn.fetch(
@@ -300,9 +265,6 @@ async def delete_camera(camera_id: str) -> bool:
         return result.endswith("1")
 
 
-# ---------------------------------------------------------------------------
-# Violations
-# ---------------------------------------------------------------------------
 async def log_violation(camera_id: str, camera_name: str, zone: str, track_id: int,
                          violation_type: str, snapshot_path: Optional[str] = None,
                          area_group_id: Optional[int] = None, area_group: Optional[str] = None) -> int:
@@ -412,9 +374,6 @@ async def delete_camera_status(camera_id: str):
         await conn.execute("DELETE FROM camera_status WHERE camera_id = $1", camera_id)
 
 
-# ---------------------------------------------------------------------------
-# Alert Rules CRUD
-# ---------------------------------------------------------------------------
 async def list_rules(enabled_only: bool = False) -> List[Dict[str, Any]]:
     query = "SELECT * FROM alert_rules"
     if enabled_only:

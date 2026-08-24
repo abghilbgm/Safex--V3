@@ -1,17 +1,7 @@
 # docker-compose.yml
-# ---------------------------------------------------------------------------
-# Uses PostgreSQL 14 (matching your existing PG version). The healthcheck +
-# depends_on: condition: service_healthy ensures the app container only
-# starts AFTER Postgres reports itself ready to accept connections - this,
-# combined with the app's own internal connection-retry logic (see
-# app/db.py init_pool()), is what prevents "Application startup failed.
-# Exiting." caused by the app trying to connect before Postgres is ready.
-#
-# Usage:
-#   copy .env.example to .env, then:
-#   docker compose up -d --build
-#   docker compose logs -f ppe-app        <- watch startup here
-# ---------------------------------------------------------------------------
+# PostgreSQL 14 + app container. Healthcheck + depends_on ensures the app
+# only starts after Postgres is ready; the app also retries its own
+# connection internally (app/db.py) as a second layer of protection.
 version: "3.9"
 
 services:
@@ -27,6 +17,9 @@ services:
       - "5432:5432"
     volumes:
       - ppe-postgres-data:/var/lib/postgresql/data
+    # Bumped shared_buffers/max_connections a bit above default to
+    # comfortably handle many camera workers writing concurrently.
+    command: ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=128MB"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ppe_user} -d ${POSTGRES_DB:-ppe_compliance}"]
       interval: 5s
@@ -44,10 +37,6 @@ services:
         condition: service_healthy
     env_file: .env
     environment:
-      # IMPORTANT: when running via docker-compose, POSTGRES_HOST MUST be
-      # "postgres" (the service name above), NOT "localhost" - containers
-      # can't reach each other via localhost. This overrides whatever is
-      # in .env so you don't have to remember to change it yourself.
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       PPE_DEVICE: "cpu"
