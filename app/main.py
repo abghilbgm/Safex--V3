@@ -58,9 +58,6 @@ if os.path.isdir(DASHBOARD_DIR):
     app.mount("/static", StaticFiles(directory=DASHBOARD_DIR), name="static")
 
 
-# ---------------------------------------------------------------------------
-# WebSocket endpoints
-# ---------------------------------------------------------------------------
 @app.websocket("/ws/video/{camera_id}")
 async def ws_video(websocket: WebSocket, camera_id: str):
     await websocket.accept()
@@ -89,9 +86,6 @@ async def ws_events(websocket: WebSocket):
         await hub.unsubscribe_events(q)
 
 
-# ---------------------------------------------------------------------------
-# Root / health
-# ---------------------------------------------------------------------------
 @app.get("/")
 async def root():
     index_path = os.path.join(DASHBOARD_DIR, "index.html")
@@ -105,9 +99,6 @@ async def health():
     return {"status": "ok", "time": time.strftime("%Y-%m-%d %H:%M:%S"), "ws": hub.stats()}
 
 
-# ---------------------------------------------------------------------------
-# Cameras — now fully dynamic: add / edit (incl. RTSP URL) / refresh / delete
-# ---------------------------------------------------------------------------
 class CameraIn(BaseModel):
     camera_id: str
     name: str
@@ -142,16 +133,12 @@ async def list_cameras():
             "enabled": cam["enabled"],
             "connected": persisted.get("connected", False) if live_running else False,
             "worker_running": live_running,
-            # rtsp_url intentionally omitted from the general list response
-            # (may contain credentials) - fetch via GET /api/cameras/{id} to edit
         })
     return out
 
 
 @app.get("/api/cameras/{camera_id}")
 async def get_camera(camera_id: str):
-    """Returns full camera details INCLUDING rtsp_url - used by the
-    dashboard's Edit Camera form only."""
     cam = await db.get_camera(camera_id)
     if not cam:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -164,7 +151,7 @@ async def add_camera(camera: CameraIn):
     if existing:
         raise HTTPException(status_code=409, detail=f"Camera '{camera.camera_id}' already exists")
 
-    created = await db.create_camera(
+    await db.create_camera(
         camera.camera_id, camera.name, camera.rtsp_url, camera.area_group_id,
         camera.required_ppe, camera.enabled,
     )
@@ -190,9 +177,6 @@ async def edit_camera(camera_id: str, update: CameraUpdate):
     await db.update_camera(camera_id, **fields)
     updated = await db.get_camera(camera_id)
 
-    # Any change that affects the live stream (RTSP URL, enabled toggle, or
-    # required_ppe which the compliance engine needs) triggers a refresh -
-    # this is the "editing RTSP URL should take effect" requirement.
     if rtsp_changed or enabled_changed or "required_ppe" in fields:
         if updated["enabled"]:
             await _camera_manager.refresh_camera(camera_id)
@@ -204,9 +188,6 @@ async def edit_camera(camera_id: str, update: CameraUpdate):
 
 @app.post("/api/cameras/{camera_id}/refresh")
 async def refresh_camera(camera_id: str):
-    """Explicit 'Refresh' button in the dashboard - restarts the camera's
-    stream+worker without changing any configuration. Useful for recovering
-    from a stuck RTSP connection without having to edit anything."""
     ok = await _camera_manager.refresh_camera(camera_id)
     if not ok:
         raise HTTPException(status_code=404, detail="Camera not found")
@@ -223,9 +204,6 @@ async def remove_camera(camera_id: str):
     return {"deleted": camera_id}
 
 
-# ---------------------------------------------------------------------------
-# Area Groups
-# ---------------------------------------------------------------------------
 class AreaGroupIn(BaseModel):
     name: str
     description: str = ""
@@ -263,9 +241,6 @@ async def remove_area_group(group_id: int):
     return {"deleted": group_id}
 
 
-# ---------------------------------------------------------------------------
-# Violations / Stats / Export
-# ---------------------------------------------------------------------------
 @app.get("/api/violations")
 async def violations(limit: int = 50, camera_id: Optional[str] = None,
                       violation_type: Optional[str] = None, area_group_id: Optional[int] = None):
@@ -306,9 +281,6 @@ async def get_snapshot(violation_id: int):
     return FileResponse(path, media_type="image/jpeg")
 
 
-# ---------------------------------------------------------------------------
-# Alert Rules CRUD
-# ---------------------------------------------------------------------------
 class RuleIn(BaseModel):
     name: str
     camera_id: Optional[str] = None

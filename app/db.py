@@ -1,13 +1,7 @@
 """
 db.py — async PostgreSQL data layer (asyncpg, connection-pooled).
-
-New in this version:
-  - `area_groups` table: user-defined groupings (e.g. "Substation", "Kiln Floor")
-  - `cameras` table: cameras are now DB-backed, not hardcoded in config.py.
-    Each camera optionally belongs to an area_group.
-  - `violations.area_group` / `area_group_id`: denormalized at write-time so
-    historical violations keep the group they were logged under even if a
-    camera's group assignment changes later.
+Cameras and Area Groups are DB-backed entities, editable at runtime.
+Violations reference area_group_id/area_group (denormalized at write-time).
 """
 import logging
 import time
@@ -123,10 +117,12 @@ def get_pool() -> asyncpg.Pool:
 
 async def _seed_if_empty():
     """First-boot convenience: if the cameras table is empty, populate it
-    from config.SEED_CAMERAS / SEED_AREA_GROUPS so there's something to work
-    with immediately. After this, all camera management happens via the API."""
+    from config.SEED_CAMERAS / SEED_AREA_GROUPS. After this, all camera
+    management happens via the dashboard/API - editing config.py again has
+    no effect unless the DB is wiped."""
     existing_cameras = await list_cameras()
     if existing_cameras:
+        logger.info(f"{len(existing_cameras)} camera(s) already in DB - skipping seed")
         return
 
     logger.info("No cameras found in DB - seeding from config.SEED_CAMERAS")
@@ -188,7 +184,7 @@ async def delete_area_group(group_id: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Cameras (now DB-backed, editable from the dashboard)
+# Cameras
 # ---------------------------------------------------------------------------
 async def list_cameras() -> List[Dict[str, Any]]:
     async with get_pool().acquire() as conn:

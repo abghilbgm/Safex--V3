@@ -1,4 +1,5 @@
-"""seed_rules.py - inserts starter alert rules into PostgreSQL."""
+"""seed_rules.py - inserts starter alert rules into PostgreSQL. Run this
+ONCE after the app has started for the first time (so cameras/tables exist)."""
 import asyncio, sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app import db, config

@@ -1,4 +1,11 @@
-"""quick_test.py - visually verify PPE detection without the full stack."""
+"""quick_test.py - visually verify PPE detection on ONE camera without the
+full stack (no PostgreSQL, no dashboard). Use this FIRST to confirm your
+model + RTSP connection works before starting the full app.
+
+Usage:
+    python scripts/quick_test.py --source "rtsp://admin:mngr%402025@192.169.0.65:554/Streaming/Channels/101"
+    python scripts/quick_test.py --source path/to/photo.jpg
+"""
 import sys, os
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.dirname(_THIS_DIR)
@@ -25,6 +32,7 @@ def main():
     parser.add_argument("--required-ppe", default="helmet,vest")
     args = parser.parse_args()
     required_ppe = [p.strip() for p in args.required_ppe.split(",") if p.strip()]
+    print(f"Loading model from {config.MODEL_PATH} ...")
     detector = PPEDetector()
     engine = ComplianceEngine("TEST", required_ppe)
     source = args.source
@@ -32,28 +40,41 @@ def main():
         source = int(source)
     if isinstance(source, str) and source.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
         frame = cv2.imread(source)
+        if frame is None:
+            print(f"ERROR: could not read image {source}")
+            return
         detections = detector.infer(frame)
         for _ in range(config.VIOLATION_CONFIRM_FRAMES):
             statuses = engine.evaluate(detections)
         cv2.imwrite("quick_test_output.jpg", draw(frame.copy(), statuses))
         print("Saved quick_test_output.jpg")
         return
+    print(f"Connecting to {source} ...")
     cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        print(f"ERROR: could not open source. Check RTSP URL, credentials, network, and firewall.")
+        return
+    print("Connected! Press 'q' to quit.")
     frame_count = 0
     last_statuses = []
     while True:
         ok, frame = cap.read()
-        if not ok: break
+        if not ok:
+            print("Stream ended or frame read failed.")
+            break
         frame_count += 1
         if frame_count % config.FRAME_SKIP == 0:
             last_statuses = engine.evaluate(detector.infer(frame))
         try:
             cv2.imshow("PPE Quick Test", draw(frame.copy(), last_statuses))
-            if cv2.waitKey(1) & 0xFF == ord("q"): break
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
         except cv2.error:
             if frame_count % 30 == 0:
                 cv2.imwrite("quick_test_output.jpg", draw(frame.copy(), last_statuses))
+                print(f"[headless] wrote quick_test_output.jpg at frame {frame_count}")
     cap.release()
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()

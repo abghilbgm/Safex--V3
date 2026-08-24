@@ -95,7 +95,6 @@
         </div>
       </div>
 
-      <!-- ---------- Cameras Management Tab ---------- -->
       <div id="tab-cameras" class="tab-content">
         <div class="cameras-toolbar">
           <button class="btn-primary" id="btnNewCamera">+ Add Camera</button>
@@ -144,19 +143,18 @@
   </main>
 </div>
 
-<!-- ============ Camera Editor Modal ============ -->
 <div class="modal-backdrop" id="cameraModalBackdrop">
   <div class="modal">
     <h3 id="cameraModalTitle">Add Camera</h3>
     <form id="cameraForm">
-      <label>Camera ID (unique, e.g. CAM03)
-        <input type="text" id="camCameraId" required placeholder="CAM03" />
+      <label>Camera ID (unique, e.g. CAM17)
+        <input type="text" id="camCameraId" required placeholder="CAM17" />
       </label>
       <label>Display Name
         <input type="text" id="camName" required placeholder="e.g. Loading Dock Entry" />
       </label>
       <label>RTSP URL
-        <input type="text" id="camRtspUrl" required placeholder="rtsp://admin:password@192.168.1.53:554/stream1" />
+        <input type="text" id="camRtspUrl" required placeholder="rtsp://admin:password@192.168.1.53:554/Streaming/Channels/101" />
       </label>
       <div class="form-row">
         <label>Area Group
@@ -184,12 +182,11 @@
   </div>
 </div>
 
-<!-- ============ Area Groups Manager Modal ============ -->
 <div class="modal-backdrop" id="groupsModalBackdrop">
   <div class="modal">
     <h3>Area Groups</h3>
     <div class="groups-add-row">
-      <input type="text" id="newGroupName" placeholder="New area group name (e.g. Kiln Floor)" />
+      <input type="text" id="newGroupName" placeholder="New area group name" />
       <input type="text" id="newGroupDesc" placeholder="Description (optional)" />
       <button class="btn-primary" id="btnAddGroup">+ Add</button>
     </div>
@@ -203,7 +200,6 @@
   </div>
 </div>
 
-<!-- ============ Rule Editor Modal ============ -->
 <div class="modal-backdrop" id="ruleModalBackdrop">
   <div class="modal">
     <h3 id="ruleModalTitle">New Alert Rule</h3>
@@ -252,7 +248,6 @@
   </div>
 </div>
 
-<!-- ============ Snapshot Lightbox ============ -->
 <div class="lightbox-backdrop" id="lightboxBackdrop">
   <div class="lightbox">
     <button class="lightbox-close" id="lightboxClose">✕</button>

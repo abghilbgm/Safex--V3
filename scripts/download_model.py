@@ -21,3 +21,5 @@ if __name__ == "__main__":
     import shutil
     shutil.copy(path, args.out)
     print(f"Saved model to {args.out}")
+    print("NOTE: Run 'python -c \"from ultralytics import YOLO; print(YOLO(\\'models/best.pt\\').names)\"'")
+    print("      and compare against app/config.py CLASS_MAP if class names differ.")

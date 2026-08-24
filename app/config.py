@@ -1,14 +1,15 @@
 """
 config.py
 ---------
-Central configuration. Cameras and Area Groups are now DYNAMIC - managed
-via the dashboard's Cameras tab and stored in PostgreSQL (`cameras` and
-`area_groups` tables), NOT hardcoded here anymore.
+Central configuration. Cameras and Area Groups are DYNAMIC - managed via
+the dashboard's Cameras tab and stored in PostgreSQL (`cameras` and
+`area_groups` tables), NOT hardcoded here after first boot.
 
-SEED_CAMERAS below is used ONLY on first startup, if the `cameras` table is
-empty, to bootstrap something to work with. After that, all camera
-add/edit/delete/refresh operations go through the dashboard or /api/cameras
-- this file is no longer read for camera config after the first boot.
+SEED_CAMERAS / SEED_AREA_GROUPS below are used ONLY on first startup, if
+the `cameras` table is empty, to bootstrap your real plant cameras. After
+that, all camera add/edit/delete/refresh operations go through the
+dashboard or /api/cameras - editing this file again has no effect unless
+you wipe the database and restart.
 """
 import os
 from typing import List, Dict
@@ -22,26 +23,54 @@ def _env_bool(key: str, default: bool) -> bool:
 # ---------------------------------------------------------------------------
 # 1. SEED DATA (first-boot only, if `cameras`/`area_groups` tables are empty)
 # ---------------------------------------------------------------------------
+# Area groups derived from your camera zones, grouped logically by plant area.
 SEED_AREA_GROUPS: List[Dict] = [
-    {"name": "Substation", "description": "High-voltage electrical zones"},
-    {"name": "MCC Rooms", "description": "Motor control center rooms"},
+    {"name": "Substation",        "description": "High-voltage electrical substation"},
+    {"name": "MCC",                "description": "Motor control center rooms"},
+    {"name": "SYLOC",               "description": "SYLOC processing area"},
+    {"name": "Pumphouse",            "description": "Pumphouse and pumphouse MCC"},
+    {"name": "Yard",                  "description": "Container yard and scrap yard"},
+    {"name": "Gates & Security",       "description": "Plant entry/exit gates and security posts"},
+    {"name": "Safety",                  "description": "Designated safety zones"},
+    {"name": "Facilities",               "description": "Canteen / non-process facilities"},
+    {"name": "Process",                   "description": "Chemical process areas (e.g. Caustic)"},
 ]
 
+# Your 16 real plant cameras. `area_group_name` must exactly match a `name`
+# in SEED_AREA_GROUPS above so the seeder can link them correctly.
 SEED_CAMERAS: List[Dict] = [
-    {
-        "camera_id": "CAM01",
-        "name": "Substation Entry Gate",
-        "rtsp_url": _env("CAM01_RTSP", "rtsp://admin:password@192.168.1.51:554/stream1"),
-        "area_group_name": "Substation",
-        "required_ppe": ["helmet", "vest"],
-    },
-    {
-        "camera_id": "CAM02",
-        "name": "MCC Room Entry",
-        "rtsp_url": _env("CAM02_RTSP", "rtsp://admin:password@192.168.1.52:554/stream1"),
-        "area_group_name": "MCC Rooms",
-        "required_ppe": ["helmet", "vest"],
-    },
+    {"camera_id": "CAM01", "name": "CAM01", "rtsp_url": "rtsp://admin:mngr%402025@192.169.0.65:554/Streaming/Channels/101",
+     "area_group_name": "Substation", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM02", "name": "CAM02", "rtsp_url": "rtsp://admin:mngr%402025@192.169.0.65:554/Streaming/Channels/201",
+     "area_group_name": "MCC", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM03", "name": "SYLOC 2", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/501",
+     "area_group_name": "SYLOC", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM04", "name": "SYLOC 1", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/601",
+     "area_group_name": "SYLOC", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM05", "name": "Pumphouse MCC Inside", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/701",
+     "area_group_name": "Pumphouse", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM06", "name": "Pumphouse 1", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/801",
+     "area_group_name": "Pumphouse", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM07", "name": "Pumphouse MCC Outside", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/901",
+     "area_group_name": "Pumphouse", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM08", "name": "Container Yard", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/201",
+     "area_group_name": "Yard", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM09", "name": "AG Gate PTZ", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/302",
+     "area_group_name": "Gates & Security", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM10", "name": "Safety Corner", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/601",
+     "area_group_name": "Safety", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM11", "name": "Ahara Bhuvan", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/1001",
+     "area_group_name": "Facilities", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM12", "name": "Caustic", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/1101",
+     "area_group_name": "Process", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM13", "name": "Admin Gate", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/1201",
+     "area_group_name": "Gates & Security", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM14", "name": "Admin Entrance", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/1301",
+     "area_group_name": "Gates & Security", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM15", "name": "AG Security", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/1401",
+     "area_group_name": "Gates & Security", "required_ppe": ["helmet", "vest"]},
+    {"camera_id": "CAM16", "name": "Scrap Yard", "rtsp_url": "rtsp://admin:mngr1234@192.168.100.65:554/Streaming/Channels/1502",
+     "area_group_name": "Yard", "required_ppe": ["helmet", "vest"]},
 ]
 
 # ---------------------------------------------------------------------------

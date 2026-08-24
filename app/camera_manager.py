@@ -4,16 +4,6 @@ camera_manager.py
 Manages the lifecycle of camera worker tasks dynamically, so cameras can be
 added, edited (including RTSP URL), refreshed, or removed from the
 dashboard at runtime - WITHOUT restarting the whole application.
-
-Each camera gets:
-  - one RTSPStream (threaded frame grabber)
-  - one asyncio worker task (inference -> compliance -> violation logging
-    -> alert dispatch -> WebSocket broadcast)
-
-"Refresh" (used after editing a camera's RTSP URL, or via the dashboard's
-explicit Refresh button) simply stops the existing stream+task for that
-camera and starts a fresh one with the current DB row - this cleanly
-recovers from stale connections without touching any other camera.
 """
 import os
 import cv2
@@ -50,18 +40,11 @@ def _draw_annotations(frame, statuses, camera_label: str):
 
 class CameraManager:
     def __init__(self, detector_getter: Callable[[], object], alert_manager):
-        """
-        detector_getter: zero-arg callable returning the current PPEDetector
-                         instance (a callable, not the instance itself, so
-                         the detector can be lazily created after startup).
-        alert_manager:    shared AlertManager instance.
-        """
         self._detector_getter = detector_getter
         self._alert_manager = alert_manager
         self._tasks: Dict[str, asyncio.Task] = {}
         self._streams: Dict[str, RTSPStream] = {}
 
-    # -- Public lifecycle API (called from REST endpoints in main.py) ------
     async def start_camera(self, camera: dict):
         camera_id = camera["camera_id"]
         if camera_id in self._tasks:
@@ -90,8 +73,6 @@ class CameraManager:
         logger.info(f"[{camera_id}] worker stopped")
 
     async def refresh_camera(self, camera_id: str) -> bool:
-        """Stops and restarts the camera's stream+worker using the LATEST DB
-        row (picks up any RTSP URL / required_ppe / area group changes)."""
         camera = await db.get_camera(camera_id)
         if not camera:
             return False
@@ -101,8 +82,6 @@ class CameraManager:
         return True
 
     async def reconcile_all(self):
-        """Called once at app startup: starts a worker for every enabled
-        camera currently in the DB."""
         cameras = await db.list_cameras()
         for cam in cameras:
             if cam["enabled"]:
@@ -123,7 +102,6 @@ class CameraManager:
     def running_camera_ids(self):
         return list(self._tasks.keys())
 
-    # -- The actual per-camera inference/alert/broadcast loop --------------
     async def _camera_worker(self, camera: dict, stream: RTSPStream):
         camera_id = camera["camera_id"]
         camera_name = camera["name"]

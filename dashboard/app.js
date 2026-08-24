@@ -37,9 +37,6 @@ function startClock() {
   setInterval(tick, 1000);
 }
 
-// ---------------------------------------------------------------
-// Area Groups
-// ---------------------------------------------------------------
 async function loadAreaGroups() {
   try {
     const res = await fetch(API.areaGroups);
@@ -91,7 +88,7 @@ function setupGroupsModal() {
     document.getElementById("newGroupDesc").value = "";
     await loadAreaGroups();
     renderGroupsTable();
-    await loadCameras(); // refresh camera table's group names too
+    await loadCameras();
   });
 }
 
@@ -119,9 +116,6 @@ function renderGroupsTable() {
   );
 }
 
-// ---------------------------------------------------------------
-// Cameras: list, add, edit (incl. RTSP URL), refresh, delete
-// ---------------------------------------------------------------
 async function loadCameras() {
   try {
     const res = await fetch(API.cameras);
@@ -320,9 +314,6 @@ async function deleteCamera(cameraId) {
   await loadCameras();
 }
 
-// ---------------------------------------------------------------
-// Camera Add/Edit Modal
-// ---------------------------------------------------------------
 function setupCameraModal() {
   const backdrop = document.getElementById("cameraModalBackdrop");
   document.getElementById("btnNewCamera").addEventListener("click", () => openCameraModal(null));
@@ -415,9 +406,6 @@ async function saveCamera() {
   }
 }
 
-// ---------------------------------------------------------------
-// Live Violation Event Feed (WebSocket)
-// ---------------------------------------------------------------
 function connectEventStream() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${proto}://${location.host}/ws/events`);
@@ -492,9 +480,6 @@ function bumpViolationCounter() {
   if (!isNaN(current)) el.textContent = current + 1;
 }
 
-// ---------------------------------------------------------------
-// Violations Gallery Tab
-// ---------------------------------------------------------------
 function setupViolationsGallery() {
   document.getElementById("btnRefreshViolations").addEventListener("click", loadViolationsGallery);
   document.getElementById("violationCameraFilter").addEventListener("change", loadViolationsGallery);
@@ -559,9 +544,6 @@ async function loadViolationsGallery() {
   });
 }
 
-// ---------------------------------------------------------------
-// Lightbox
-// ---------------------------------------------------------------
 function setupLightbox() {
   document.getElementById("lightboxClose").addEventListener("click", closeLightbox);
   document.getElementById("lightboxBackdrop").addEventListener("click", (e) => {
@@ -581,9 +563,6 @@ function closeLightbox() {
   document.getElementById("lightboxImage").src = "";
 }
 
-// ---------------------------------------------------------------
-// Stats + Custom Canvas Charts
-// ---------------------------------------------------------------
 async function refreshStats() {
   try {
     const res = await fetch(`${API.stats}?window_hours=24`);
@@ -710,9 +689,6 @@ function drawEmptyState(ctx, w, h) {
   ctx.textAlign = "left";
 }
 
-// ---------------------------------------------------------------
-// Tabs
-// ---------------------------------------------------------------
 function setupTabs() {
   document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -728,9 +704,6 @@ function setupTabs() {
   });
 }
 
-// ---------------------------------------------------------------
-// Alert Rules CRUD
-// ---------------------------------------------------------------
 async function refreshRules() {
   try {
     const res = await fetch(API.rules);
