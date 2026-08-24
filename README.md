@@ -1,4 +1,4 @@
-# Sentinel — PPE Compliance Detection System
+# INGPCE — PPE Compliance Detection System
 
 Real-time AI system for RTSP/CCTV PPE compliance detection: low-latency
 WebSocket dashboard, PostgreSQL storage, dynamic camera management with
